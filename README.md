@@ -50,6 +50,18 @@ cd <folder>
 git pull
 ```
 
+## Push to your GitHub
+
+1. Create a new repository on GitHub (e.g. `survey-memory-integrate-pattern`), do **not** init with README.
+2. Add remote and push:
+
+```bash
+git remote add origin https://github.com/YOUR_USERNAME/survey-memory-integrate-pattern.git
+git push -u origin main
+```
+
+Replace `YOUR_USERNAME` with your GitHub username.
+
 ## License
 
 Each subfolder is the upstream project; see its repository for license and terms.
