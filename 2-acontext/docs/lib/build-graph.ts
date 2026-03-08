@@ -1,0 +1,38 @@
+import { source } from '@/lib/source';
+import { PathUtils } from 'fumadocs-core/source';
+import type { Graph } from '@/components/graph-view';
+
+export async function buildGraph(): Promise<Graph> {
+  const graph: Graph = { links: [], nodes: [] };
+
+  await Promise.all(
+    source.getPages().map(async (page) => {
+      if (page.data.type === 'openapi') return;
+
+      graph.nodes.push({
+        id: page.url,
+        url: page.url,
+        text: page.data.title,
+        description: page.data.description,
+      });
+
+      const data = await page.data.load();
+      const refs = (data as { extractedReferences?: { href: string }[] })
+        .extractedReferences ?? [];
+
+      const dir = PathUtils.dirname(page.path);
+
+      for (const ref of refs) {
+        const refPage = source.getPageByHref(ref.href, { dir });
+        if (!refPage) continue;
+
+        graph.links.push({
+          source: page.url,
+          target: refPage.page.url,
+        });
+      }
+    }),
+  );
+
+  return graph;
+}

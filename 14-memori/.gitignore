@@ -1,0 +1,73 @@
+# Python
+*.pyc
+*.pyo
+*.pyd
+__pycache__
+*.so
+*.egg
+*.egg-info
+dist/
+/build/
+*.swp
+
+# Testing
+.pytest_cache
+.coverage
+coverage.xml
+htmlcov/
+.tox
+
+# IDEs
+.DS_Store
+.idea
+.vscode
+*.swo
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# Environment variables
+.env
+
+# SQLite databases
+*.db
+*.db-journal
+
+# UV
+uv.lock
+
+# Python packaging
+*.egg-info/
+dist/
+/build/
+
+# Sensitive files (do not commit)
+google-credentials.json
+*.pem
+*.key
+
+AGENTS.md
+
+tests/examples/*
+
+# Benchmarking results
+tests/benchmarks/results/
+results/
+*.json
+*.csv
+!pyproject.toml
+!package.json
+!composer.json
+
+# Node / TypeScript
+node_modules/
+dist/
+*.tsbuildinfo
+coverage
+!package-lock.json
+!tsconfig.json
+!tsconfig.build.json
+!.prettierrc.json
+!openclaw.plugin.json

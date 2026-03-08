@@ -1,0 +1,63 @@
+---
+title: What is Task Tracking?
+description: "Automatic task tracking, progress recording, and session summaries — zero instrumentation"
+---
+
+Store messages → Acontext automatically extracts tasks, tracks progress, and detects success/failure. No tracking code needed.
+
+## 30-Second Example
+
+Your agent stores a conversation where the user asks: *"Deploy the new API to staging"*
+
+Acontext's background monitor extracts:
+
+```
+Task: "Deploy the new API to staging"
+Status: success
+Progress:
+  1. Built Docker image from Dockerfile
+  2. Pushed to registry at gcr.io/my-project/api:v2.1
+  3. Deployed to staging cluster via kubectl
+User preferences:
+  1. Always run tests before deploying
+```
+
+You didn't write any of that. It came from the conversation automatically.
+
+## What Gets Tracked
+
+| Field | Example |
+|-------|---------|
+| **Task** | "Deploy the new API to staging" |
+| **Status** | `pending` → `running` → `success` or `failed` |
+| **Progress** | Step-by-step record of what the agent did |
+| **User preferences** | Constraints the user mentioned |
+
+## Feeds Into Skill Memory
+
+Completed tasks feed into the [skill memory pipeline](/learn/quick):
+
+- **Success** → extracts the approach and generalizable patterns
+- **Failure** → extracts the failure point and prevention principles
+
+These become reusable agent skills automatically.
+
+<CardGroup cols={2}>
+
+<Card title="Agent Tasks" icon="list-check" href="/observe/agent_tasks">
+Extract and query tasks via SDK.
+</Card>
+
+<Card title="Session Buffer" icon="clock" href="/observe/buffer">
+How message batching and processing timing works.
+</Card>
+
+<Card title="Dashboard" icon="chart-simple" href="/observe/dashboard">
+View messages, tasks, artifacts, and skills visually.
+</Card>
+
+<Card title="Distributed Tracing" icon="wave-pulse" href="/observe/traces">
+Monitor request flows with OpenTelemetry and Jaeger.
+</Card>
+
+</CardGroup>

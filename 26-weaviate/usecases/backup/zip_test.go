@@ -1,0 +1,625 @@
+//                           _       _
+// __      _____  __ ___   ___  __ _| |_ ___
+// \ \ /\ / / _ \/ _` \ \ / / |/ _` | __/ _ \
+//  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
+//   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
+//
+//  Copyright © 2016 - 2026 Weaviate B.V. All rights reserved.
+//
+//  CONTACT: hello@weaviate.io
+//
+
+package backup
+
+import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	mathrand "math/rand"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/backup"
+)
+
+func TestZip(t *testing.T) {
+	var (
+		pathNode = "./test_data/node1"
+		ctx      = context.Background()
+	)
+	for _, compressionLevel := range []CompressionLevel{GzipBestCompression, NoCompression} {
+		t.Run(fmt.Sprintf("compressionLevel=%v", compressionLevel), func(t *testing.T) {
+			pathDest := filepath.Join(t.TempDir(), "test_data", "node1")
+			require.NoError(t, copyDir(pathNode, pathDest))
+
+			// setup
+			sd, err := getShard(pathDest, "cT9eTErXgmTX")
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// compression writer
+			compressBuf := bytes.NewBuffer(make([]byte, 0, 1000_000))
+			z, rc, err := NewZip(pathDest, int(compressionLevel), 0, 0)
+			require.NoError(t, err)
+			var zInputLen int64
+			go func() {
+				fileList := &backup.FileList{Files: append([]string{}, sd.Files...)}
+				zInputLen, err = z.WriteShard(ctx, &sd, fileList, true, &atomic.Int64{}, "chunk")
+				if err != nil {
+					t.Errorf("compress: %v", err)
+				}
+				z.Close()
+			}()
+
+			// compression reader
+			zOutputLen, err := io.Copy(compressBuf, rc)
+			if err != nil {
+				t.Fatal("copy to buffer", err)
+			}
+
+			if err := rc.Close(); err != nil {
+				t.Errorf("compress:close %v", err)
+			}
+
+			f := float32(zInputLen) / float32(zOutputLen)
+			fmt.Printf("compression input_size=%d output_size=%d factor=%v\n", zInputLen, zOutputLen, f)
+
+			// cleanup folder to restore test afterwards
+			require.NoError(t, os.RemoveAll(pathDest))
+			require.NoError(t, os.MkdirAll(pathDest, 0o755))
+
+			// decompression
+			var compressionType backup.CompressionType
+			if compressionLevel == NoCompression {
+				compressionType = backup.CompressionNone
+			} else {
+				compressionType = backup.CompressionGZIP
+			}
+			uz, wc := NewUnzip(pathDest, compressionType)
+
+			// decompression reader
+			done := make(chan struct{})
+			var uzInputLen atomic.Int64
+			go func() {
+				uzInputLen2, err := io.Copy(wc, compressBuf)
+				if err != nil {
+					t.Errorf("writer: %v", err)
+				}
+				uzInputLen.Store(uzInputLen2)
+				if err := wc.Close(); err != nil {
+					t.Errorf("close writer: %v", err)
+				}
+				done <- struct{}{}
+				close(done)
+			}()
+
+			// decompression writer
+			uzOutputLen, err := uz.ReadChunk()
+			if err != nil {
+				t.Fatalf("unzip: %v", err)
+			}
+			if err := uz.Close(); err != nil {
+				t.Errorf("close reader: %v", err)
+			}
+
+			fmt.Printf("unzip input_size=%d output_size=%d\n", uzInputLen.Load(), uzOutputLen)
+
+			_, err = os.Stat(pathDest)
+			if err != nil {
+				t.Fatalf("cannot find decompressed folder: %v", err)
+			}
+
+			<-done // wait for writer to finish
+
+			if zInputLen != uzOutputLen {
+				t.Errorf("zip input size %d != unzip output size %d", uzOutputLen, zInputLen)
+			}
+			if zOutputLen != uzInputLen.Load() {
+				t.Errorf("zip output size %d != unzip input size %d", zOutputLen, uzInputLen.Load())
+			}
+		})
+	}
+}
+
+func TestUnzipPathEscape(t *testing.T) {
+	destPath := t.TempDir()               // destination directory for unzip
+	tmpDir := t.TempDir()                 // temporary directory to create files
+	completelyUnrelatedDir := t.TempDir() // directory that should not be written to
+
+	// create a tar.gz archive with a file that tries to escape destPath
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "test1.txt"), []byte("malicious content"), 0o644))
+	info, err := os.Stat(filepath.Join(tmpDir, "test1.txt"))
+	require.NoError(t, err)
+	header, err := tar.FileInfoHeader(info, info.Name())
+	require.NoError(t, err)
+
+	var buf bytes.Buffer
+	gzw, _ := gzip.NewWriterLevel(&buf, zipLevel(0))
+	tarWriter := tar.NewWriter(gzw)
+
+	content := []byte("malicious content")
+	header.Name = "../003/file.txt" // relative path that tries to escape the destPath to completelyUnrelatedDir
+	require.NoError(t, tarWriter.WriteHeader(header))
+	_, err = tarWriter.Write(content)
+	require.NoError(t, err)
+	require.NoError(t, tarWriter.Close())
+	require.NoError(t, gzw.Close())
+
+	// now restore from the archive to destPath, all writes should be contained within destPath
+	uz, wc := NewUnzip(destPath, backup.CompressionGZIP)
+	go func() {
+		_, err2 := io.Copy(wc, &buf)
+		require.NoError(t, err2)
+		require.NoError(t, wc.Close())
+	}()
+
+	_, err = uz.ReadChunk()
+	require.ErrorContains(t, err, "outside shard root")
+
+	entries, err := os.ReadDir(completelyUnrelatedDir)
+	require.NoError(t, err)
+	require.Len(t, entries, 0, "no files should be written outside of destPath")
+}
+
+func TestZipLevel(t *testing.T) {
+	tests := []struct {
+		in  int
+		out int
+	}{
+		{-1, gzip.DefaultCompression},
+		{4, gzip.DefaultCompression},
+		{0, gzip.DefaultCompression},
+		{int(GzipBestCompression), gzip.BestCompression},
+		{int(GzipBestSpeed), gzip.BestSpeed},
+	}
+
+	for _, test := range tests {
+		if got := zipLevel(test.in); got != test.out {
+			t.Errorf("compression level got=%d want=%d", got, test.out)
+		}
+	}
+}
+
+func TestZipConfig(t *testing.T) {
+	tests := []struct {
+		chunkSize  int
+		percentage int
+
+		minPoolSize int
+		maxPoolSize int
+	}{
+		{0, 0, 1, _NUMCPU / 2},
+		{2 - 1, 50, _NUMCPU / 2, _NUMCPU},
+		{512 + 1, 50, _NUMCPU / 2, _NUMCPU},
+		{2, 0, 1, _NUMCPU / 2},
+		{1, 100, 1, _NUMCPU},
+		{100, 0, 1, _NUMCPU / 2}, // 100 MB
+		{513, 0, 1, _NUMCPU / 2},
+	}
+
+	for i, test := range tests {
+		got := newZipConfig(Compression{
+			Level:         GzipBestSpeed,
+			CPUPercentage: test.percentage,
+		})
+		if n := test.minPoolSize; got.GoPoolSize < n {
+			t.Errorf("%d. min pool size got=%d  want>=%d", i, got.GoPoolSize, n)
+		}
+		if n := test.maxPoolSize; got.GoPoolSize > n {
+			t.Errorf("%d. max pool size got=%d  want<%d", i, got.GoPoolSize, n)
+		}
+	}
+}
+
+func getShard(src, shardName string) (sd backup.ShardDescriptor, err error) {
+	sd.Name = shardName
+	err = filepath.Walk(src, func(fPath string, fi os.FileInfo, err error) error {
+		// return on any error
+		if err != nil {
+			return err
+		}
+		if !fi.Mode().IsRegular() || !strings.Contains(fPath, shardName) {
+			return nil
+		}
+		relPath := strings.TrimPrefix(strings.ReplaceAll(fPath, src, ""), string(filepath.Separator))
+		name := fi.Name()
+
+		if strings.Contains(name, "indexcount") {
+			sd.DocIDCounterPath = relPath
+			sd.DocIDCounter, err = os.ReadFile(fPath)
+		} else if strings.Contains(name, "proplengths") {
+			sd.PropLengthTrackerPath = relPath
+			sd.PropLengthTracker, err = os.ReadFile(fPath)
+
+		} else if strings.Contains(name, "version") {
+			sd.ShardVersionPath = relPath
+			sd.Version, err = os.ReadFile(fPath)
+		} else {
+			sd.Files = append(sd.Files, relPath)
+		}
+
+		return err
+	})
+
+	return sd, err
+}
+
+func copyDir(src string, dest string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		relPath, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+
+		destPath := filepath.Join(dest, relPath)
+		if info.IsDir() {
+			return os.MkdirAll(destPath, info.Mode())
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+
+		return os.WriteFile(destPath, data, info.Mode())
+	})
+}
+
+// TestRenaming tests that files can be read while being renamed concurrently without involving backup
+func TestRenaming(t *testing.T) {
+	dir := t.TempDir()
+	rng := mathrand.New(mathrand.NewSource(time.Now().UnixNano()))
+
+	// create files with random data and one important byte at the end to make sure that the complete file is read
+	// There will be concurrent renaming and reading of the files
+	for i := range 100 {
+		f, err := os.Create(filepath.Join(dir, strconv.Itoa(i)+".tmp"))
+		require.NoError(t, err)
+		size := rng.Intn(4096)
+		buf := make([]byte, size)
+		n, err := rng.Read(buf)
+		require.NoError(t, err)
+		require.Equal(t, size, n)
+		_, err = f.Write(buf)
+		require.NoError(t, err)
+		_, err = f.Write([]byte{byte(i)})
+		require.NoError(t, err)
+
+		require.NoError(t, f.Close())
+
+	}
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := range 100 {
+			require.NoError(t, os.Rename(filepath.Join(dir, strconv.Itoa(i)+".tmp"), filepath.Join(dir, strconv.Itoa(i)+".tmp2")))
+		}
+	}()
+
+	for i := range 100 {
+		f, err := os.Open(filepath.Join(dir, strconv.Itoa(i)+".tmp"))
+		if err != nil && errors.Is(err, fs.ErrNotExist) {
+			f, err = os.Open(filepath.Join(dir, strconv.Itoa(i)+".tmp2"))
+		}
+		require.NoError(t, err)
+		data, err := io.ReadAll(f)
+		require.NoError(t, err)
+		require.Equal(t, []byte{byte(i)}, data[len(data)-1:])
+
+	}
+	wg.Wait()
+}
+
+// TestWriteRegularsFillsChunkWithSmallFiles verifies that when a large file doesn't fit,
+// WriteRegulars scans ahead and fills the chunk with smaller files that do fit.
+func TestWriteRegularsFillsChunkWithSmallFiles(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "source")
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "shard"), os.ModePerm))
+
+	// Create files: one big (5000 bytes) and three small (100 bytes each)
+	bigData := bytes.Repeat([]byte("X"), 5000)
+	smallData := bytes.Repeat([]byte("s"), 100)
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "shard", "small1.db"), smallData, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "shard", "big.db"), bigData, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "shard", "small2.db"), smallData, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "shard", "small3.db"), smallData, 0o644))
+
+	sd := backup.ShardDescriptor{Name: "shard", Node: "node1"}
+	files := []string{
+		"shard/small1.db",
+		"shard/big.db",
+		"shard/small2.db",
+		"shard/small3.db",
+	}
+	fileSizes := map[string]int64{
+		"shard/small1.db": 100,
+		"shard/big.db":    5000,
+		"shard/small2.db": 100,
+		"shard/small3.db": 100,
+	}
+
+	// Chunk size = 1000 bytes. small1 fits (100), big doesn't (5000).
+	// Scan ahead should pick up small2 and small3.
+	z, rc, err := NewZip(dir, int(NoCompression), 1000, 0)
+	require.NoError(t, err)
+
+	fileList := &backup.FileList{
+		Files:     append([]string{}, files...),
+		FileSizes: fileSizes,
+	}
+	preCompSize := &atomic.Int64{}
+
+	var writeErr error
+	var written int64
+	go func() {
+		written, writeErr = z.WriteRegulars(context.Background(), &sd, fileList, preCompSize, "chunk1")
+		z.Close()
+	}()
+
+	buf := bytes.NewBuffer(nil)
+	_, err = io.Copy(buf, rc)
+	require.NoError(t, err)
+	require.NoError(t, rc.Close())
+	require.NoError(t, writeErr)
+	require.Greater(t, written, int64(0))
+
+	// After chunk 1: small1, small2, small3 should have been written.
+	// Only big.db should remain in the file list.
+	require.Equal(t, 1, fileList.Len(), "only big file should remain")
+	require.Equal(t, "shard/big.db", fileList.Peek())
+
+	// Verify the tar contains exactly 3 files
+	tr := tar.NewReader(buf)
+	var tarFiles []string
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		tarFiles = append(tarFiles, hdr.Name)
+	}
+	require.ElementsMatch(t, []string{"shard/small1.db", "shard/small2.db", "shard/small3.db"}, tarFiles)
+}
+
+// TestBigFileGetsOwnChunk verifies that files >= minIndividualFileSize get their own chunk
+// and are tracked in BigFilesChunk for incremental dedup.
+func TestBigFileGetsOwnChunk(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "source")
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "shard"), os.ModePerm))
+
+	smallData := bytes.Repeat([]byte("s"), 100)
+	bigData := bytes.Repeat([]byte("B"), 2000)
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "shard", "small1.db"), smallData, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "shard", "big.db"), bigData, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "shard", "small2.db"), smallData, 0o644))
+
+	sd := backup.ShardDescriptor{Name: "shard", Node: "node1"}
+	fileSizes := map[string]int64{
+		"shard/small1.db": 100,
+		"shard/big.db":    2000,
+		"shard/small2.db": 100,
+	}
+
+	// chunkTargetSize=10000 (plenty of room), minIndividualFileSize=500 (big.db qualifies)
+	fileList := &backup.FileList{
+		Files:     []string{"shard/small1.db", "shard/big.db", "shard/small2.db"},
+		FileSizes: fileSizes,
+	}
+
+	// Chunk 1: small1 is written, then big.db is at front but firstFile=false,
+	// so fillChunkWithSmallFiles runs and picks up small2. big.db remains.
+	z, rc, err := NewZip(dir, int(NoCompression), 10000, 500)
+	require.NoError(t, err)
+
+	preCompSize := &atomic.Int64{}
+	var writeErr error
+	go func() {
+		_, writeErr = z.WriteRegulars(context.Background(), &sd, fileList, preCompSize, "chunk1")
+		z.Close()
+	}()
+
+	buf := bytes.NewBuffer(nil)
+	_, err = io.Copy(buf, rc)
+	require.NoError(t, err)
+	require.NoError(t, rc.Close())
+	require.NoError(t, writeErr)
+
+	// After chunk 1: small1 and small2 written, only big.db remains
+	require.Equal(t, 1, fileList.Len(), "only big file should remain")
+	require.Equal(t, "shard/big.db", fileList.Peek())
+
+	// Verify chunk 1 tar contains the two small files
+	tr := tar.NewReader(buf)
+	var tarFiles []string
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		tarFiles = append(tarFiles, hdr.Name)
+	}
+	require.ElementsMatch(t, []string{"shard/small1.db", "shard/small2.db"}, tarFiles)
+
+	// Chunk 2: big.db is first file and big — gets its own chunk
+	z2, rc2, err := NewZip(dir, int(NoCompression), 10000, 500)
+	require.NoError(t, err)
+	preCompSize2 := &atomic.Int64{}
+	go func() {
+		_, writeErr = z2.WriteRegulars(context.Background(), &sd, fileList, preCompSize2, "chunk2")
+		z2.Close()
+	}()
+
+	buf2 := bytes.NewBuffer(nil)
+	_, err = io.Copy(buf2, rc2)
+	require.NoError(t, err)
+	require.NoError(t, rc2.Close())
+	require.NoError(t, writeErr)
+
+	require.Equal(t, 0, fileList.Len(), "all files should be written")
+
+	// Verify chunk 2 tar contains only big.db
+	tr2 := tar.NewReader(buf2)
+	var tarFiles2 []string
+	for {
+		hdr, err := tr2.Next()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		tarFiles2 = append(tarFiles2, hdr.Name)
+	}
+	require.Equal(t, []string{"shard/big.db"}, tarFiles2)
+
+	// Verify big.db is tracked in BigFilesChunk
+	require.NotNil(t, sd.BigFilesChunk)
+	bigInfo, ok := sd.BigFilesChunk["shard/big.db"]
+	require.True(t, ok, "big.db should be tracked in BigFilesChunk")
+	require.Equal(t, int64(2000), bigInfo.Size)
+	require.Equal(t, []string{"chunk2"}, bigInfo.ChunkKeys)
+}
+
+// TestRenamingDuringBackup tests that the backup process can handle files being renamed concurrently
+func TestRenamingDuringBackup(t *testing.T) {
+	for _, compressionLevel := range []CompressionLevel{GzipBestCompression, NoCompression} {
+		t.Run(fmt.Sprintf("compressionLevel=%v", compressionLevel), func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "source")
+			dir2 := filepath.Join(t.TempDir(), "dest")
+			ctx := context.Background()
+			require.NoError(t, os.MkdirAll(dir, os.ModePerm))
+			require.NoError(t, os.MkdirAll(dir2, os.ModePerm))
+
+			sd := backup.ShardDescriptor{
+				Name: "shard1",
+				Node: "node1",
+			}
+
+			rng := mathrand.New(mathrand.NewSource(time.Now().UnixNano()))
+
+			// create files with random data and one important byte at the end to make sure that the complete file is read
+			// There will be concurrent renaming and reading of the files
+			writeDir := filepath.Join(dir, "collection")
+			writeDirRename := filepath.Join(dir, backup.DeleteMarkerAdd("collection"))
+
+			require.NoError(t, os.MkdirAll(writeDir, os.ModePerm))
+			counter := 0
+			for i := range 100 {
+				f, err := os.Create(filepath.Join(writeDir, strconv.Itoa(i)+".tmp"))
+				require.NoError(t, err)
+				size := rng.Intn(4096)
+				buf := make([]byte, size)
+				n, err := rng.Read(buf)
+				require.NoError(t, err)
+				require.Equal(t, size, n)
+				_, err = f.Write(buf)
+				require.NoError(t, err)
+				_, err = f.Write([]byte{byte(i)})
+				require.NoError(t, err)
+				counter += size + i
+
+				require.NoError(t, f.Close())
+				sd.Files = append(sd.Files, filepath.Join("collection", strconv.Itoa(i)+".tmp"))
+			}
+
+			f, err := os.Create(filepath.Join(writeDir, "indexcount.tmp"))
+			require.NoError(t, err)
+			_, err = f.Write([]byte("12345"))
+			require.NoError(t, err)
+			require.NoError(t, f.Close())
+			sd.DocIDCounterPath = filepath.Join("collection", "indexcount.tmp")
+			sd.DocIDCounter = []byte("12345")
+
+			f, err = os.Create(filepath.Join(writeDir, "version.tmp"))
+			require.NoError(t, err)
+			_, err = f.Write([]byte("12345"))
+			require.NoError(t, err)
+			require.NoError(t, f.Close())
+			sd.ShardVersionPath = filepath.Join("collection", "version.tmp")
+			sd.Version = []byte("12345")
+
+			f, err = os.Create(filepath.Join(writeDir, "propLength.tmp"))
+			require.NoError(t, err)
+			_, err = f.Write([]byte("12345"))
+			require.NoError(t, err)
+			require.NoError(t, f.Close())
+			sd.PropLengthTrackerPath = filepath.Join("collection", "propLength.tmp")
+			sd.PropLengthTracker = []byte("12345")
+
+			// start backup process
+			z, rc, err := NewZip(dir, int(compressionLevel), 0, 0)
+			require.NoError(t, err)
+			go func() {
+				fileList := &backup.FileList{Files: append([]string{}, sd.Files...)}
+				_, err := z.WriteShard(ctx, &sd, fileList, true, &atomic.Int64{}, "chunk")
+				require.NoError(t, err)
+				require.NoError(t, z.Close())
+			}()
+
+			// rename files concurrently
+			wg := sync.WaitGroup{}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				require.NoError(t, os.Rename(writeDir, writeDirRename))
+			}()
+
+			compressBuf := bytes.NewBuffer(make([]byte, 0, 1000_000))
+			_, err = io.Copy(compressBuf, rc)
+			require.NoError(t, err)
+			require.NoError(t, rc.Close())
+
+			require.NoError(t, os.RemoveAll(dir))
+
+			var compressionType backup.CompressionType
+			if compressionLevel == NoCompression {
+				compressionType = backup.CompressionNone
+			} else {
+				compressionType = backup.CompressionGZIP
+			}
+
+			uz, wc := NewUnzip(dir2, compressionType)
+			go func() {
+				_, err := io.Copy(wc, compressBuf)
+				require.NoError(t, err)
+				require.NoError(t, wc.Close())
+			}()
+			_, err = uz.ReadChunk()
+			require.NoError(t, err)
+			require.NoError(t, uz.Close())
+
+			wg.Wait()
+
+			// check restored backup
+			readDir := filepath.Join(dir2, "collection")
+			counter2 := 0
+			for i := range 100 {
+				buf, err := os.ReadFile(filepath.Join(readDir, strconv.Itoa(i)+".tmp"))
+				require.NoError(t, err)
+				// files have a random length AND their last byte is the index
+				counter2 += len(buf) - 1 + int(buf[len(buf)-1])
+			}
+			require.Equal(t, counter, counter2)
+		})
+	}
+}
