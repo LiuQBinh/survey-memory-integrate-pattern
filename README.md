@@ -1,11 +1,21 @@
-# Survey: Memory Frameworks for LLM-Based Agents
+# Survey: Integrating Memory into LLM-Based Agents
 
 Cloned source code of open-source memory frameworks for LLM-based agents. One folder per framework, numbered for reference.
 
-## Source
+## Objective
 
-- **Survey paper:** [arXiv:2512.13564](https://arxiv.org/pdf/2512.13564) — **Table 9**: *Overview of Open-Source Memory Frameworks for LLM-Based Agents*
-- **Paper list:** [Shichun-Liu/Agent-Memory-Paper-List](https://github.com/Shichun-Liu/Agent-Memory-Paper-List)
+**Goal:** Survey and compare **how memory is integrated into memory agents** — integration patterns, APIs, and how agents use memory in practice.
+
+- **Integration patterns:** Where and how the agent reads/writes memory (SDK, tools, RAG, graph API, etc.).
+- **Storage & retrieval:** Backends, indexing, and recall semantics (e.g. semantic search, temporal, hierarchical).
+- **Agent loop:** How memory is injected into context, updated after turns, and exposed as tools or state.
+
+This repo is the codebase for that survey; findings can be documented per framework or in a separate comparison doc.
+
+## Reference
+
+- **Tham khảo** — Survey paper: [arXiv:2512.13564](https://arxiv.org/pdf/2512.13564), **Table 9**: *Overview of Open-Source Memory Frameworks for LLM-Based Agents*
+- **Tham khảo** — Paper list: [Shichun-Liu/Agent-Memory-Paper-List](https://github.com/Shichun-Liu/Agent-Memory-Paper-List)
 
 Table columns: **Fac.** (Factual), **Exp.** (Experiential), **MM.** (Multimodal), **Structure**, **Evaluation**.
 
