@@ -14,14 +14,14 @@ This repo is the codebase for that survey; findings can be documented per framew
 
 ## Reference
 
-- **Tham khảo** — Survey paper: [arXiv:2512.13564](https://arxiv.org/pdf/2512.13564), **Table 9**: *Overview of Open-Source Memory Frameworks for LLM-Based Agents*
-- **Tham khảo** — Paper list: [Shichun-Liu/Agent-Memory-Paper-List](https://github.com/Shichun-Liu/Agent-Memory-Paper-List)
+- **Reference** — Survey paper: [arXiv:2512.13564](https://arxiv.org/pdf/2512.13564), **Table 9**: *Overview of Open-Source Memory Frameworks for LLM-Based Agents*
+- **Reference** — Paper list: [Shichun-Liu/Agent-Memory-Paper-List](https://github.com/Shichun-Liu/Agent-Memory-Paper-List)
 
 Table columns: **Fac.** (Factual), **Exp.** (Experiential), **MM.** (Multimodal), **Structure**, **Evaluation**.
 
 ## Note table (survey findings)
 
-Khảo sát từng framework, ghi lại integration pattern, storage/retrieval, agent loop. Cập nhật khi survey xong mỗi framework.
+Survey each framework and record integration pattern, storage/retrieval, and agent loop. Update when each framework survey is complete.
 
 | # | Framework | Integration pattern | Storage & retrieval | Agent loop | Notes |
 |---|-----------|---------------------|---------------------|------------|-------|
@@ -59,26 +59,26 @@ Paths below are under `2-acontext/`. MQ: exchange `session.message` / `learning.
 
 **STORE (message → task → skill)**
 
-| Step | Mô tả | Code |
-|------|--------|------|
-| 1 | App gửi message | SDK: `src/client/acontext-py/src/acontext/resources/sessions.py` → `store_message()` (L222–316). Gửi **POST** `/session/{session_id}/messages` với `blob`, `format`. |
-| 2 | API nhận, lưu DB, publish MQ | Handler: `src/server/api/go/internal/modules/handler/session.go` → `StoreMessage()` (L316). Service: `src/server/api/go/internal/modules/service/session.go` → `StoreMessage()` (L277): lưu message (L369), `PublishJSON(SessionMessage, SessionMessageInsert, {ProjectID, SessionID, MessageID})` (L378–384). |
-| 3 | CORE: consumer message mới | `src/server/core/acontext_core/service/session_message.py` → `insert_new_message()` (L43–50, L49 body = InsertNewMessage). Queue: `session.message.insert`, queue name `session.message.insert.entry`. |
-| 4 | Buffer / timer hoặc process | Cùng file: buffer chưa đủ → `check_buffer_timer_or_set` + `waiting_for_message_notify` (L75–95) publish `session.message.buffer.process`. Lock không lấy được → publish `session.message.insert.retry` (L109–114). Khi đủ hoặc từ retry: `buffer_new_message()` (L155–204) → lấy lock, gọi `MC.process_session_pending_message`. |
-| 5 | Task Agent (extract task, có thể finish) | `src/server/core/acontext_core/service/controller/message.py` → `process_session_pending_message()` (L15–101). Gọi `AT.task_agent_curd()` (L74). Task agent: `src/server/core/acontext_core/llm/agent/task.py` → `task_agent_curd()` (L122–303); tools trong `llm/tool/task_lib/` (insert, update, append, progress, finish). |
-| 6 | Publish skill learning khi task xong | Cùng file task.py: khi tool cập nhật task có `learning_task_ids`, publish `SkillLearnTask` (L257–274): `publish_mq(EX.learning_skill, RK.learning_skill_distill, SkillLearnTask(...))`. |
-| 7 | Distillation consumer | `src/server/core/acontext_core/service/skill_learner.py` → `process_skill_distillation()` (L25–75). Queue: `learning.skill.distill`. Gọi `SLC.process_context_distillation()` (L51); controller: `src/server/core/acontext_core/service/controller/skill_learner.py` → `process_context_distillation()` (L26–…), LLM prompt: `llm/prompt/skill_distillation.py`, tools: `llm/tool/skill_learner_lib/distill.py`. Sau đó `publish_mq(..., RK.learning_skill_agent, distilled_payload)` (L68–72). |
-| 8 | Skill Agent consumer | Cùng file skill_learner.py → `process_skill_agent()` (L84–…). Queue: `learning.skill.agent`. Lock Redis learning space, gọi `SLC.run_skill_agent()`; agent: `src/server/core/acontext_core/llm/agent/skill_learner.py` → `skill_learner_agent`, tools: `llm/tool/skill_learner_lib/` (create_skill, str_replace_skill_file, get_skill, get_skill_file, …). Ghi artifact qua service data/artifact. |
+| Step | Description | Code |
+|------|-------------|------|
+| 1 | App sends message | SDK: `src/client/acontext-py/src/acontext/resources/sessions.py` → `store_message()` (L222–316). Sends **POST** `/session/{session_id}/messages` with `blob`, `format`. |
+| 2 | API receives, saves to DB, publishes to MQ | Handler: `src/server/api/go/internal/modules/handler/session.go` → `StoreMessage()` (L316). Service: `src/server/api/go/internal/modules/service/session.go` → `StoreMessage()` (L277): save message (L369), `PublishJSON(SessionMessage, SessionMessageInsert, {ProjectID, SessionID, MessageID})` (L378–384). |
+| 3 | CORE: consume new message | `src/server/core/acontext_core/service/session_message.py` → `insert_new_message()` (L43–50, L49 body = InsertNewMessage). Queue: `session.message.insert`, queue name `session.message.insert.entry`. |
+| 4 | Buffer / timer or process | Same file: buffer not full → `check_buffer_timer_or_set` + `waiting_for_message_notify` (L75–95) publish `session.message.buffer.process`. Lock not acquired → publish `session.message.insert.retry` (L109–114). When full or from retry: `buffer_new_message()` (L155–204) → acquire lock, call `MC.process_session_pending_message`. |
+| 5 | Task Agent (extract task, may finish) | `src/server/core/acontext_core/service/controller/message.py` → `process_session_pending_message()` (L15–101). Calls `AT.task_agent_curd()` (L74). Task agent: `src/server/core/acontext_core/llm/agent/task.py` → `task_agent_curd()` (L122–303); tools in `llm/tool/task_lib/` (insert, update, append, progress, finish). |
+| 6 | Publish skill learning when task completes | Same file task.py: when tool updates task with `learning_task_ids`, publish `SkillLearnTask` (L257–274): `publish_mq(EX.learning_skill, RK.learning_skill_distill, SkillLearnTask(...))`. |
+| 7 | Distillation consumer | `src/server/core/acontext_core/service/skill_learner.py` → `process_skill_distillation()` (L25–75). Queue: `learning.skill.distill`. Calls `SLC.process_context_distillation()` (L51); controller: `src/server/core/acontext_core/service/controller/skill_learner.py` → `process_context_distillation()` (L26–…), LLM prompt: `llm/prompt/skill_distillation.py`, tools: `llm/tool/skill_learner_lib/distill.py`. Then `publish_mq(..., RK.learning_skill_agent, distilled_payload)` (L68–72). |
+| 8 | Skill Agent consumer | Same file skill_learner.py → `process_skill_agent()` (L84–…). Queue: `learning.skill.agent`. Lock Redis learning space, call `SLC.run_skill_agent()`; agent: `src/server/core/acontext_core/llm/agent/skill_learner.py` → `skill_learner_agent`, tools: `llm/tool/skill_learner_lib/` (create_skill, str_replace_skill_file, get_skill, get_skill_file, …). Write artifact via service data/artifact. |
 
-**RECALL (đọc skill trong chat)**
+**RECALL (read skill in chat)**
 
-| Step | Mô tả | Code |
-|------|--------|------|
-| 1 | Preload skills (context) | SDK: `src/client/acontext-py/src/acontext/agent/skill.py` → `SkillContext.create(client, skill_ids)` (L35–57): với mỗi `skill_id` gọi `client.skills.get(skill_id)` → **GET** `/agent_skills/{skill_id}`. Định nghĩa: `src/client/acontext-py/src/acontext/resources/skills.py` → `get()` (L95–105). |
+| Step | Description | Code |
+|------|-------------|------|
+| 1 | Preload skills (context) | SDK: `src/client/acontext-py/src/acontext/agent/skill.py` → `SkillContext.create(client, skill_ids)` (L35–57): for each `skill_id` call `client.skills.get(skill_id)` → **GET** `/agent_skills/{skill_id}`. Definition: `src/client/acontext-py/src/acontext/resources/skills.py` → `get()` (L95–105). |
 | 2 | Tool schema + context prompt | `skill.py` → `BaseToolPool.to_openai_tool_schema()` (base: `src/client/acontext-py/src/acontext/agent/base.py` L107–108), `ctx.get_context_prompt()` (L20–32: XML `<available_skills>`). |
-| 3 | App gửi LLM với tools + prompt | Doc: `docs/content/docs/(guides)/tool/(features)/skill_tools.mdx` (L22–58): loop chat, `tools=SKILL_TOOLS.to_openai_tool_schema()`, system có `skills_context`. |
-| 4 | Thực thi tool khi LLM gọi | `skill.py` → `GetSkillTool.execute()` (L188–214), `GetSkillFileTool.execute()` (L283–319). `get_skill`: `ctx.get_skill(skill_name)` (đã có trong context). `get_skill_file`: `ctx.client.skills.get_file(skill_id=skill.id, file_path=...)` → **GET** `/agent_skills/{skill_id}/file?file_path=...` (skills.py L115–141). |
-| 5 | API phục vụ skill / file | API (Go): routes trong `src/server/api/go/internal/router/router.go` (learning_spaces, agent_skills); skill file content/URL từ DB + S3. |
+| 3 | App sends to LLM with tools + prompt | Doc: `docs/content/docs/(guides)/tool/(features)/skill_tools.mdx` (L22–58): chat loop, `tools=SKILL_TOOLS.to_openai_tool_schema()`, system has `skills_context`. |
+| 4 | Execute tool when LLM calls | `skill.py` → `GetSkillTool.execute()` (L188–214), `GetSkillFileTool.execute()` (L283–319). `get_skill`: `ctx.get_skill(skill_name)` (already in context). `get_skill_file`: `ctx.client.skills.get_file(skill_id=skill.id, file_path=...)` → **GET** `/agent_skills/{skill_id}/file?file_path=...` (skills.py L115–141). |
+| 5 | API serves skill / file | API (Go): routes in `src/server/api/go/internal/router/router.go` (learning_spaces, agent_skills); skill file content/URL from DB + S3. |
 
 **MQ constants:** `src/server/core/acontext_core/service/constants.py` — `EX.session_message`, `EX.learning_skill`; `RK.session_message_insert`, `RK.session_message_insert_retry`, `RK.session_message_buffer_process`, `RK.learning_skill_distill`, `RK.learning_skill_agent`.
 
