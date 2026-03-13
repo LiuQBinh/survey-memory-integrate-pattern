@@ -55,7 +55,7 @@ Survey each framework and record integration pattern, storage/retrieval, and age
 
 ### Acontext: flow ↔ code mapping
 
-Paths below are under `2-acontext/`. MQ: exchange `session.message` / `learning.skill`; routing keys in `src/server/core/acontext_core/service/constants.py` (EX, RK).
+Paths below are under `02/`. MQ: exchange `session.message` / `learning.skill`; routing keys in `src/server/core/acontext_core/service/constants.py` (EX, RK).
 
 **STORE (message → task → skill)**
 
@@ -86,15 +86,15 @@ Paths below are under `2-acontext/`. MQ: exchange `session.message` / `learning.
 
 | # | Folder | Framework | GitHub | Website / Docs |
 |---|--------|-----------|--------|----------------|
-| 1 | `1-a-mem` | A-MEM | [agiresearch/A-mem](https://github.com/agiresearch/A-mem) | — |
-| 2 | `2-acontext` | Acontext | [memodb-io/Acontext](https://github.com/memodb-io/Acontext) | — |
-| 3 | `3-agentmemory` | AgentMemory | [elizaOS/agentmemory](https://github.com/elizaOS/agentmemory) | [Website](https://www.getzep.com/product/agent-memory/) |
-| 4 | `4-chroma` | Chroma | [chroma-core/chroma](https://github.com/chroma-core/chroma) | [trychroma.com](https://www.trychroma.com/) |
-| 5 | `5-cognee` | Cognee | [topoteretes/cognee](https://github.com/topoteretes/cognee) | [cognee.ai](https://www.cognee.ai/) |
-| 6 | `6-hindsight` | HindSight | [vectorize-io/hindsight](https://github.com/vectorize-io/hindsight) | — |
-| 7 | `7-langmem` | LangMem | [langchain-ai/langmem](https://github.com/langchain-ai/langmem) | [Docs](https://langchain-ai.github.io/langmem/) |
-| 8 | `8-lightmem` | LightMem | [zjunlp/LightMem](https://github.com/zjunlp/LightMem) | — |
-| 9 | `9-mem0` | Mem0 | [mem0ai/mem0](https://github.com/mem0ai/mem0) | [mem0.ai](https://mem0.ai/) |
+| 1 | `01-a-mem` | A-MEM | [agiresearch/A-mem](https://github.com/agiresearch/A-mem) | — |
+| 2 | `02-acontext` | Acontext | [memodb-io/Acontext](https://github.com/memodb-io/Acontext) | — |
+| 3 | `03-agentmemory` | AgentMemory | [elizaOS/agentmemory](https://github.com/elizaOS/agentmemory) | [Website](https://www.getzep.com/product/agent-memory/) |
+| 4 | `04-chroma` | Chroma | [chroma-core/chroma](https://github.com/chroma-core/chroma) | [trychroma.com](https://www.trychroma.com/) |
+| 5 | `05-cognee` | Cognee | [topoteretes/cognee](https://github.com/topoteretes/cognee) | [cognee.ai](https://www.cognee.ai/) |
+| 6 | `06-hindsight` | HindSight | [vectorize-io/hindsight](https://github.com/vectorize-io/hindsight) | — |
+| 7 | `07-langmem` | LangMem | [langchain-ai/langmem](https://github.com/langchain-ai/langmem) | [Docs](https://langchain-ai.github.io/langmem/) |
+| 8 | `08-lightmem` | LightMem | [zjunlp/LightMem](https://github.com/zjunlp/LightMem) | — |
+| 9 | `09-mem0` | Mem0 | [mem0ai/mem0](https://github.com/mem0ai/mem0) | [mem0.ai](https://mem0.ai/) |
 | 10 | `10-memary` | Memary | [kingjulio8238/Memary](https://github.com/kingjulio8238/Memary) | [Docs](https://kingjulio8238.github.io/memarydocs/) |
 | 11 | `11-memengine` | MemEngine | [nuster1128/MemEngine](https://github.com/nuster1128/MemEngine) | — |
 | 12 | `12-memgpt` | MemGPT | [cpacker/MemGPT](https://github.com/cpacker/MemGPT) | [docs.letta.com](https://docs.letta.com/) |
